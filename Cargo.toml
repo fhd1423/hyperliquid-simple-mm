@@ -11,3 +11,5 @@ ethers = {version = "0.17", features = ["eip712", "abigen"]}
 tokio = { version = "1", features = ["full"] }
 log = "0.4.19"
 lazy_static = "1.4.0"
+serde = "1.0.198"
+reqwest = { version = "0.12.4", features = ["json"] }

@@ -6,6 +6,8 @@ use tokio::sync::mpsc::unbounded_channel;
 use std::{f64, sync::{Arc, Mutex}, thread::sleep, time::Duration};
 
 use std::collections::VecDeque;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
 
 struct PriceQueue {
     queue: VecDeque<f64>,
@@ -74,15 +76,74 @@ lazy_static::lazy_static! {
     };
 }
 
+#[derive(Serialize)]
+struct RequestPayload {
+    #[serde(rename = "type")]
+    type_field: String,
+    user: String,
+}
+
+#[derive(Deserialize)]
+struct ResponseData {
+    balances: Vec<Balance>,
+}
+
+#[derive(Deserialize)]
+struct Balance {
+    coin: String,
+    total: String, // Using String to handle potential floating-point inconsistencies.
+}
+
+
+async fn get_position(ticker: &str) -> Option<f64> {
+    let client = Client::new();
+    let ticker = ticker.to_string();
+
+    let response = client.post("https://api.hyperliquid.xyz/info")
+        .json(&RequestPayload {
+            type_field: "spotClearinghouseState".to_string(),
+            user: "0x711ACA028ECAEA178EbC29c7059CFdb195FaCD37".to_string(),
+        })
+        .header("Content-Type", "application/json")
+        .send()
+        .await.ok();
+
+    if let Some(response) = response {
+        let data: ResponseData = response.json().await.ok()?;
+
+        for balance in data.balances {
+            if balance.coin == ticker {
+                return match balance.total.parse::<f64>() {
+                    Ok(num) => Some(num),
+                    Err(_) => None,
+                };
+            }
+        }
+    }
+
+    None
+}
+
+
 
 async fn place_trade(exchange_client: &mut ExchangeClient, is_buy: bool, limit_px: f64) -> Option<u64> {
+
+    let current_purr_position = get_position("PURR").await.unwrap_or(0.0);
+    let current_usdc_position = get_position("USDC").await.unwrap_or(0.0);
+
+    // already have that position
+    if is_buy && current_usdc_position < 100.0 || !is_buy && current_purr_position < 100.0{
+        return None;
+    }
+
+    let sz_to_trade = if is_buy { current_usdc_position / limit_px } else { current_purr_position };
     // Create the order request
     let order = ClientOrderRequest {
         asset: "PURR/USDC".to_string(),
         is_buy,
         reduce_only: false,
         limit_px,
-        sz: 9000.0,
+        sz: sz_to_trade.floor(),
         order_type: ClientOrder::Limit(ClientLimit {
             tif: "Gtc".to_string(),
         }),
@@ -186,7 +247,7 @@ async fn main() {
                                     last_trade_action = decision.to_string();
                                 }
                                 else{
-                                    let new_trade_price = if decision == "buy" { (new_price * 1.05 * 100000.0).round() / 100000.0 } else { (new_price * 0.95 * 100000.0).round() / 100000.0 };
+                                    let new_trade_price = if decision == "buy" { (new_price * 1.01 * 100000.0).round() / 100000.0 } else { (new_price * 0.99 * 100000.0).round() / 100000.0 };
                                     // theoretically should always fill
                                     place_trade(&mut client, decision == "buy", new_trade_price).await;
                                     last_trade_action = decision.to_string();
