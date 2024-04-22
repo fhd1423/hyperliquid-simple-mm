@@ -1,8 +1,8 @@
-use ethers::{signers::LocalWallet};
+use ethers::signers::LocalWallet;
 use hyperliquid_rust_sdk::{
      AssetMeta, BaseUrl, ClientCancelRequest, ClientLimit, ClientOrder, ClientOrderRequest, ExchangeClient, ExchangeDataStatus, ExchangeResponseStatus, InfoClient, Message, Meta, Subscription
 };
-use tokio::{sync::mpsc::unbounded_channel};
+use tokio::sync::mpsc::unbounded_channel;
 use std::{f64, sync::{Arc, Mutex}, thread::sleep, time::Duration};
 
 use std::collections::VecDeque;
@@ -33,9 +33,9 @@ impl PriceQueue {
         let avg = self.current_average();
 
 
-        if new_price > avg * 1.001 {
+        if new_price > avg * 1.02 {
             (avg, "sell".to_string())
-        } else if new_price < avg * 0.999 {
+        } else if new_price < avg * 0.99 {
             (avg, "buy".to_string())
         } else {
             (avg, "hold".to_string())
@@ -101,7 +101,7 @@ async fn place_trade(exchange_client: &mut ExchangeClient, is_buy: bool, limit_p
     };
 
     // Extract the status from the response data
-    let status = exchange_response.data.and_then(|data| data.statuses.get(0).cloned());
+    let status = exchange_response.data.and_then(|data| data.statuses.first().cloned());
 
     // Based on the status, extract the oid if available
     match status {
@@ -109,12 +109,12 @@ async fn place_trade(exchange_client: &mut ExchangeClient, is_buy: bool, limit_p
         Some(ExchangeDataStatus::Resting(order)) => Some(order.oid),
         Some(status) => {
             eprintln!("Unhandled status: {status:?}");
-            return None;
+            None
         },
         None => {
             eprintln!("Status list is empty");
-            return None;
-        },
+            None
+        }
     }
 }
 
@@ -125,13 +125,13 @@ async fn cancel_trade(exchange_client: &mut ExchangeClient, oid: u64) -> bool {
     };
 
     let response = exchange_client.cancel(cancel_request, None).await.unwrap();
-    let _exchange_response = match response {
-        ExchangeResponseStatus::Ok(_data) => return true,
+    match response {
+        ExchangeResponseStatus::Ok(_data) => true,
         ExchangeResponseStatus::Err(e) => {
             eprintln!("error with exchange response: {e}");
-            return false; 
+            false 
         },
-    };
+    }
 }
 
 
@@ -168,31 +168,27 @@ async fn main() {
 
                     match decision.as_str() {
                         "buy" | "sell" => {
+                            // skip if trying to take the same trade twice in a row
                             if last_trade_action == decision {
                                 continue;
                             }
                             
-                            println!("Decision: {decision}, Last Trade: {last_trade_action} Price: {new_price}");
-                            let oid = place_trade(&mut *client, decision == "buy", new_price).await;
+                            println!("Decision: {decision}, Price: {new_price}");
+                            let oid = place_trade(&mut client, decision == "buy", new_price).await;
                             if let Some(oid) = oid {
                                 println!("{} order placed with oid: {}", decision, oid);
                                 sleep(Duration::from_secs(10));
 
-                                let cancel_response = cancel_trade(&mut *client, oid).await;
+                                let cancel_response = cancel_trade(&mut client, oid).await;
 
                                 if !cancel_response {
                                     println!("{} order filled completely for oid: {}", decision, oid);
                                     last_trade_action = decision.to_string();
                                 }
                                 else{
-                                    let new_buy_price;
-                                    if decision == "buy" {
-                                        new_buy_price = (new_price * 1.05 * 100000.0).round() / 100000.0;
-                                    } else {
-                                        new_buy_price = (new_price * 0.95 * 100000.0).round() / 100000.0;
-                                    }
+                                    let new_trade_price = if decision == "buy" { (new_price * 1.05 * 100000.0).round() / 100000.0 } else { (new_price * 0.95 * 100000.0).round() / 100000.0 };
                                     // theoretically should always fill
-                                    place_trade(&mut *client, decision == "buy", new_buy_price).await;
+                                    place_trade(&mut client, decision == "buy", new_trade_price).await;
                                     last_trade_action = decision.to_string();
                                 }
                             }
