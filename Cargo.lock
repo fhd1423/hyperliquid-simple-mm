@@ -1539,6 +1539,7 @@ dependencies = [
 name = "hyperliquid_server"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "ethers",
  "hyperliquid_rust_sdk",
  "lazy_static",
